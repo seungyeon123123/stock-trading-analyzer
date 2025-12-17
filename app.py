@@ -1,24 +1,17 @@
+git add requirements.txt
+git commit -m "Add requirements.txt for Streamlit"
+git push origin master   # 브랜치 이름이 master면 이렇게
+import streamlit as st
 import yfinance as yf
 import pandas as pd
 import ta
-import customtkinter as ctk
-import tkinter as tk
-from tkinter import ttk
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 import numpy as np
 
-# Matplotlib 다크 스타일
-plt.style.use("dark_background")
+st.set_page_config(page_title="단기 트레이딩 분석 도구", layout="wide")
 
-# CustomTkinter 전역 설정
-ctk.set_appearance_mode("dark")          # 'system', 'light', 'dark'
-ctk.set_default_color_theme("green")     # 'blue', 'dark-blue', 'green' 등
-
-# =========================
-# 유틸 함수
-# =========================
+# -------- 유틸 함수들 --------
 def format_market_cap(mc, currency="USD"):
     if mc is None or (isinstance(mc, float) and np.isnan(mc)):
         return "N/A"
@@ -45,29 +38,19 @@ def format_price(value, currency="USD"):
     return f"{value:,.2f}"
 
 def infer_currency(info):
-    c = info.get("currency")
-    if not c:
-        try:
-            c = info.get("fast_info", {}).get("currency")
-        except Exception:
-            c = None
+    c = info.get("currency") if isinstance(info, dict) else None
+    if not c and isinstance(info, dict):
+        c = info.get("fast_info", {}).get("currency")
     return c or "USD"
 
-# =========================
-# 1. 데이터 수집
-# =========================
 def fetch_data(ticker: str, years: int = 3):
     end = datetime.today()
     start = end - timedelta(days=365 * years)
     data = yf.download(ticker, start=start, end=end, interval="1d", auto_adjust=False)
-
     if data is None or data.empty:
         raise ValueError(f"{ticker} : 야후 파이낸스에서 데이터를 가져올 수 없습니다.")
-
-    # 멀티인덱스 컬럼이면 바깥 레벨만 사용
     if isinstance(data.columns, pd.MultiIndex):
         data.columns = data.columns.get_level_values(0)
-
     t = yf.Ticker(ticker)
     try:
         info = t.info
@@ -75,27 +58,16 @@ def fetch_data(ticker: str, years: int = 3):
         info = {}
     return data, info, t
 
-# =========================
-# 2. 실적 일정 (yfinance만 사용)
-# =========================
 def fetch_earnings_info_free(yf_ticker_obj):
-    """
-    yfinance Ticker 객체에서 calendar/earnings 정보를 최대한 안전하게 뽑아
-    '실적 일정' 한 줄로 요약해서 반환.
-    """
     try:
         cal = yf_ticker_obj.calendar
-
-        # calendar가 dict로 들어오는 경우도 방어
         if isinstance(cal, dict):
-            # 예: {'Earnings Date': [Timestamp(...), ...]}
             ed = cal.get("Earnings Date") or cal.get("Earnings date") \
                  or cal.get("earningsDate") or cal.get("Earnings")
             if isinstance(ed, (list, tuple)) and ed:
                 date_text = str(ed[0])[:10]
                 return f"다음/최근 실적 일자(야후 캘린더 기준): {date_text}"
         elif isinstance(cal, pd.DataFrame) and not cal.empty:
-            # DataFrame 형태인 경우
             date_text = None
             for idx in cal.index:
                 if "Earnings" in str(idx):
@@ -105,7 +77,6 @@ def fetch_earnings_info_free(yf_ticker_obj):
             if date_text:
                 return f"다음/최근 실적 일자(야후 캘린더 기준): {date_text}"
 
-        # fallback: quarterly_earnings 마지막 날짜
         qe = getattr(yf_ticker_obj, "quarterly_earnings", None)
         if isinstance(qe, pd.DataFrame) and not qe.empty:
             last_q_date = str(qe.index[-1])[:10]
@@ -115,9 +86,6 @@ def fetch_earnings_info_free(yf_ticker_obj):
     except Exception as e:
         return f"실적 일정: 오류 ({e})"
 
-# =========================
-# 3. 시장 지수 상황 (3개월 수익률)
-# =========================
 def fetch_market_context():
     indices = {
         "S&P500": "^GSPC",
@@ -125,12 +93,11 @@ def fetch_market_context():
         "KOSPI": "^KS11",
     }
     end = datetime.today()
-    start = end - timedelta(days=120)  # 여유 있게 4개월
+    start = end - timedelta(days=120)
     lines = []
     for name, code in indices.items():
         try:
             df = yf.download(code, start=start, end=end, interval="1d")
-            # 최소 30개 이상 데이터가 있어야 3개월 대략 계산 가능
             if df is None or df.empty or len(df) < 30:
                 continue
             close = df["Close"].iloc[-1]
@@ -141,17 +108,12 @@ def fetch_market_context():
             lines.append(f"{name} 3개월 수익률(대략): {ret_3m:.1f}%")
         except Exception:
             continue
-
     if not lines:
         lines.append("시장 지수: 야후 데이터 수집에 실패했습니다.")
     return lines
 
-# =========================
-# 4. 분석 로직 (차트/트레이딩)
-# =========================
 def analyze_stock(data: pd.DataFrame, info: dict, hold_days: int = 10):
     df = data.copy()
-
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
@@ -184,7 +146,6 @@ def analyze_stock(data: pd.DataFrame, info: dict, hold_days: int = 10):
     ma50 = float(last["MA50"])
     ma200 = float(last["MA200"])
     atr14 = float(last["ATR14"])
-
     if atr14 == 0 or np.isnan(atr14):
         atr14 = close * 0.01
 
@@ -254,49 +215,49 @@ def analyze_stock(data: pd.DataFrame, info: dict, hold_days: int = 10):
             return "N/A"
         return f"{v:.1f}%"
 
-    lines = []
-    lines.append(f"[기본 정보]")
-    lines.append(f"이름: {long_name or 'N/A'}")
-    lines.append(f"섹터/업종: {sector or 'N/A'}")
-    lines.append(f"통화: {currency}")
+    report_lines = []
+    report_lines.append(f"[기본 정보]")
+    report_lines.append(f"이름: {long_name or 'N/A'}")
+    report_lines.append(f"섹터/업종: {sector or 'N/A'}")
+    report_lines.append(f"통화: {currency}")
     if market_cap:
-        lines.append(f"시가총액: {format_market_cap(market_cap, currency)}")
+        report_lines.append(f"시가총액: {format_market_cap(market_cap, currency)}")
     if trailing_pe and not np.isnan(trailing_pe):
-        lines.append(f"PER(추정): {trailing_pe:.1f}")
-    lines.append("")
+        report_lines.append(f"PER(추정): {trailing_pe:.1f}")
+    report_lines.append("")
 
-    lines.append("[현재 가격 및 추세]")
-    lines.append(f"현재가: {format_price(close, currency)}")
-    lines.append(
+    report_lines.append("[현재 가격 및 추세]")
+    report_lines.append(f"현재가: {format_price(close, currency)}")
+    report_lines.append(
         "20일선 / 50일선 / 200일선: "
         f"{format_price(ma20, currency)} / "
         f"{format_price(ma50, currency)} / "
         f"{format_price(ma200, currency)}"
     )
-    lines.append(
+    report_lines.append(
         f"52주 고가 / 저가: "
         f"{format_price(high_52w, currency)} / "
         f"{format_price(low_52w, currency)}"
     )
     if r_3y is not None:
-        lines.append(f"3년 수익률(대략): {pct(r_3y)}")
+        report_lines.append(f"3년 수익률(대략): {pct(r_3y)}")
     if r_1y is not None:
-        lines.append(f"1년 수익률(대략): {pct(r_1y)}")
+        report_lines.append(f"1년 수익률(대략): {pct(r_1y)}")
     if r_3m is not None:
-        lines.append(f"3개월 수익률(대략): {pct(r_3m)}")
+        report_lines.append(f"3개월 수익률(대략): {pct(r_3m)}")
     if r_1m is not None:
-        lines.append(f"1개월 수익률(대략): {pct(r_1m)}")
-    lines.append(f"장기 추세 판단: {long_trend}")
-    lines.append(" · " + ", ".join(pos_vs_ma))
-    lines.append("")
+        report_lines.append(f"1개월 수익률(대략): {pct(r_1m)}")
+    report_lines.append(f"장기 추세 판단: {long_trend}")
+    report_lines.append(" · " + ", ".join(pos_vs_ma))
+    report_lines.append("")
 
-    lines.append("[단기 변동성]")
-    lines.append(
+    report_lines.append("[단기 변동성]")
+    report_lines.append(
         f"14일 ATR: {format_price(atr14, currency)} "
         "(대략 일일 평균 변동폭)"
     )
-    lines.append(f"단기 트레이딩 가정 보유 기간: {hold_days} 거래일")
-    lines.append("")
+    report_lines.append(f"단기 트레이딩 가정 보유 기간: {hold_days} 거래일")
+    report_lines.append("")
 
     entry_low_pct = (entry_low / close - 1) * 100
     entry_high_pct = (entry_high / close - 1) * 100
@@ -304,27 +265,27 @@ def analyze_stock(data: pd.DataFrame, info: dict, hold_days: int = 10):
     target_1_pct = (target_1 / close - 1) * 100
     target_2_pct = (target_2 / close - 1) * 100
 
-    lines.append("[단기 트레이딩 레벨 (예시)]")
-    lines.append(
+    report_lines.append("[단기 트레이딩 레벨 (예시)]")
+    report_lines.append(
         f"- 진입 구간(눌림 매수): "
         f"{format_price(entry_low, currency)} ({entry_low_pct:.1f}%) ~ "
         f"{format_price(entry_high, currency)} ({entry_high_pct:.1f}%)"
     )
-    lines.append(
+    report_lines.append(
         f"- 손절 라인: {format_price(stop_loss, currency)} "
         f"({stop_loss_pct:.1f}%)"
     )
-    lines.append(
+    report_lines.append(
         f"- 1차 목표가 (~{tp_mult:.1f} * ATR): "
         f"{format_price(target_1, currency)} ({target_1_pct:.1f}%)"
     )
-    lines.append(
+    report_lines.append(
         f"- 2차 목표가 (~{tp_mult+1:.1f} * ATR): "
         f"{format_price(target_2, currency)} ({target_2_pct:.1f}%)"
     )
-    lines.append("")
-    lines.append("※ 위 수치는 과거 변동성을 단순 적용한 참고 값이며,")
-    lines.append("   실제 매매 시에는 실적 일정/뉴스/전체 시장 상황을 반드시 함께 고려해야 합니다.")
+    report_lines.append("")
+    report_lines.append("※ 위 수치는 과거 변동성을 단순 적용한 참고 값이며,")
+    report_lines.append("   실제 매매 시에는 실적 일정/시장 상황을 반드시 함께 고려해야 합니다.")
 
     summary = {
         "이름": long_name or "N/A",
@@ -341,193 +302,56 @@ def analyze_stock(data: pd.DataFrame, info: dict, hold_days: int = 10):
         "2차목표": format_price(target_2, currency),
     }
 
-    return "\n".join(lines), df, summary
+    return "\n".join(report_lines), df, summary
 
-# =========================
-# 5. CustomTkinter GUI
-# =========================
-def create_gui():
-    app = ctk.CTk()
-    app.title("단기 트레이딩 분석 도구 (미·한 공통)")
-    app.geometry("1250x750")
+# -------- Streamlit UI --------
+st.title("단기 트레이딩 분석 도구 (웹 버전)")
 
-    base_font = ("Segoe UI", 11)
+col1, col2, col3 = st.columns([2, 1, 1])
+with col1:
+    ticker = st.text_input("티커/코드 (예: ANET, NVDA, 005930.KS)", value="ANET")
+with col2:
+    hold_days = st.slider("단기 보유일 (5~20일)", min_value=5, max_value=20, value=10, step=1)
+with col3:
+    years = st.selectbox("차트 기간 (년)", options=[1, 3, 5], index=1)
 
-    # 상단 입력 영역
-    top_frame = ctk.CTkFrame(app, corner_radius=15)
-    top_frame.pack(side="top", fill="x", padx=10, pady=10)
+run = st.button("분석 실행")
 
-    ctk.CTkLabel(top_frame, text="티커/코드", font=("Segoe UI Semibold", 12)).pack(
-        side="left", padx=(10, 5)
-    )
-    ticker_var = tk.StringVar()
-    ctk.CTkEntry(
-        top_frame,
-        textvariable=ticker_var,
-        width=140,
-        font=base_font,
-        corner_radius=10
-    ).pack(side="left", padx=5)
+if run:
+    try:
+        data, info, t_obj = fetch_data(ticker, years=years)
+        report, df, summary = analyze_stock(data, info, hold_days=hold_days)
 
-    ctk.CTkLabel(top_frame, text="단기 보유일 (5~20일)", font=("Segoe UI Semibold", 12)).pack(
-        side="left", padx=(20, 5)
-    )
-    hold_days_var = tk.IntVar(value=10)
-    hold_slider = ctk.CTkSlider(
-        top_frame,
-        from_=5,
-        to=20,
-        number_of_steps=15,
-        variable=hold_days_var,
-        width=200
-    )
-    hold_slider.pack(side="left", padx=5)
+        c_left, c_right = st.columns([3, 2])
 
-    hold_value_label = ctk.CTkLabel(top_frame, text="10일", font=base_font)
-    hold_value_label.pack(side="left", padx=5)
-
-    def update_hold_label(value):
-        hold_value_label.configure(text=f"{int(float(value))}일")
-
-    hold_slider.configure(command=update_hold_label)
-
-    analyze_button = ctk.CTkButton(
-        top_frame,
-        text="분석 실행",
-        font=("Segoe UI Semibold", 12),
-        corner_radius=10,
-        fg_color="#00b894",
-        hover_color="#019170"
-    )
-    analyze_button.pack(side="right", padx=15)
-
-    # 중앙 레이아웃
-    main_frame = ctk.CTkFrame(app, corner_radius=15)
-    main_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-
-    # 좌: 차트
-    chart_frame = ctk.CTkFrame(main_frame, corner_radius=15)
-    chart_frame.pack(side="left", fill="both", expand=True, padx=(10, 5), pady=10)
-
-    fig, ax = plt.subplots(figsize=(7, 4))
-    fig.patch.set_facecolor("#1e1e1e")
-    ax.set_facecolor("#111111")
-    canvas = FigureCanvasTkAgg(fig, master=chart_frame)
-    canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
-
-    # 우: 요약 + 텍스트
-    right_frame = ctk.CTkFrame(main_frame, corner_radius=15)
-    right_frame.pack(side="right", fill="both", expand=True, padx=(5, 10), pady=10)
-
-    # 요약 테이블
-    summary_label = ctk.CTkLabel(
-        right_frame, text="요약 정보", font=("Segoe UI Semibold", 12)
-    )
-    summary_label.pack(side="top", anchor="w", padx=10, pady=(10, 5))
-
-    columns = ("키", "값")
-    style = ttk.Style()
-    style.configure("Custom.Treeview",
-                    font=("Segoe UI", 10),
-                    rowheight=22)
-    style.configure("Custom.Treeview.Heading",
-                    font=("Segoe UI Semibold", 10))
-    style.map("Custom.Treeview", background=[("selected", "#00b894")])
-
-    tree = ttk.Treeview(
-        right_frame,
-        columns=columns,
-        show="headings",
-        height=6,
-        style="Custom.Treeview"
-    )
-    tree.heading("키", text="항목")
-    tree.heading("값", text="값")
-    tree.column("키", width=120, anchor="w")
-    tree.column("값", width=220, anchor="w")
-    tree.pack(side="top", fill="x", padx=10, pady=(0, 10))
-
-    # 상세 분석 + 실적/시장 텍스트
-    text_label = ctk.CTkLabel(
-        right_frame, text="상세 분석 / 실적 / 시장", font=("Segoe UI Semibold", 12)
-    )
-    text_label.pack(side="top", anchor="w", padx=10, pady=(0, 5))
-
-    text_frame = ctk.CTkFrame(right_frame, corner_radius=10)
-    text_frame.pack(side="top", fill="both", expand=True, padx=10, pady=(0, 10))
-
-    text_box = tk.Text(
-        text_frame,
-        bg="#111111",
-        fg="#eeeeee",
-        insertbackground="#ffffff",
-        font=("Segoe UI", 10),
-        wrap="word"
-    )
-    text_box.pack(side="left", fill="both", expand=True, padx=(5, 0), pady=5)
-
-    text_scroll = ctk.CTkScrollbar(text_frame, command=text_box.yview)
-    text_scroll.pack(side="right", fill="y", padx=(0, 5), pady=5)
-    text_box.configure(yscrollcommand=text_scroll.set)
-
-    def run_analysis():
-        ticker = ticker_var.get().strip()
-        text_box.delete("1.0", "end")
-        for row in tree.get_children():
-            tree.delete(row)
-
-        if not ticker:
-            text_box.insert("end", "티커/코드를 입력하세요.\n예: ANET, NVDA, 005930.KS")
-            return
-
-        hold_days = int(hold_days_var.get())
-        try:
-            data, info, t_obj = fetch_data(ticker, years=3)
-            report, df, summary = analyze_stock(data, info, hold_days=hold_days)
-
-            # 차트
-            ax.clear()
-            ax.set_facecolor("#111111")
+        with c_left:
+            st.subheader("가격 차트 (종가 + MA50/MA200)")
+            fig, ax = plt.subplots(figsize=(8, 4))
             ax.plot(df.index, df["Close"], label="Close", color="#00ff88", linewidth=1.5)
             if "MA50" in df.columns and not df["MA50"].isna().all():
                 ax.plot(df.index, df["MA50"], label="MA50", color="#61afef", alpha=0.9)
             if "MA200" in df.columns and not df["MA200"].isna().all():
                 ax.plot(df.index, df["MA200"], label="MA200", color="#e06c75", alpha=0.9)
+            ax.set_xlabel("Date")
+            ax.set_ylabel("Price")
+            ax.grid(True, alpha=0.25)
+            ax.legend()
+            st.pyplot(fig)
 
-            ax.set_title(f"{ticker} 가격 차트 (3년)", color="#ffffff", fontsize=11)
-            ax.set_xlabel("Date", color="#cccccc")
-            ax.set_ylabel("Price", color="#cccccc")
-            ax.tick_params(colors="#cccccc")
-            for spine in ax.spines.values():
-                spine.set_color("#555555")
-            ax.legend(facecolor="#111111", edgecolor="#555555", labelcolor="#ffffff")
-            ax.grid(True, alpha=0.25, color="#444444")
-            fig.autofmt_xdate()
-            canvas.draw()
+        with c_right:
+            st.subheader("요약 정보")
+            st.table(pd.DataFrame(summary, index=["값"]).T)
 
-            # 요약 테이블
-            for k, v in summary.items():
-                tree.insert("", "end", values=(k, v))
+        st.subheader("상세 분석")
+        st.text(report)
 
-            # 상세 분석
-            text_box.insert("end", report + "\n\n")
+        earnings_text = fetch_earnings_info_free(t_obj)
+        st.markdown("**[실적 일정 참고]**")
+        st.write(earnings_text)
 
-            # 실적 일정
-            earnings_text = fetch_earnings_info_free(t_obj)
-            text_box.insert("end", "[실적 일정 참고]\n")
-            text_box.insert("end", earnings_text + "\n\n")
+        st.markdown("**[시장 지수 3개월 흐름]**")
+        for line in fetch_market_context():
+            st.write(line)
 
-            # 시장 지수 상황
-            market_lines = fetch_market_context()
-            text_box.insert("end", "[시장 지수 3개월 흐름]\n")
-            for line in market_lines:
-                text_box.insert("end", line + "\n")
-
-        except Exception as e:
-            text_box.insert("end", f"에러 발생:\n{repr(e)}")
-
-    analyze_button.configure(command=run_analysis)
-    app.mainloop()
-
-if __name__ == "__main__":
-    create_gui()
+    except Exception as e:
+        st.error(f"에러 발생: {e}")
