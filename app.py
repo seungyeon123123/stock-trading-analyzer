@@ -1,6 +1,3 @@
-git add requirements.txt
-git commit -m "Add requirements.txt for Streamlit"
-git push origin master   # 브랜치 이름이 master면 이렇게
 import streamlit as st
 import yfinance as yf
 import pandas as pd
